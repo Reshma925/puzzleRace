@@ -1,94 +1,46 @@
-import tkinter as tk
-from tkinter import messagebox
+import customtkinter as ctk
 from PIL import Image, ImageTk
 from copy import deepcopy
-import random
-import os
+import os, random
 
-# ------------------ CONSTANTS ------------------
 
-TILE = 160
-BOARD_SIZE = 480
-BG_COLOR = "misty rose"
+ctk.set_appearance_mode("light")
+ctk.set_default_color_theme("blue")
 
-GOAL = [[1, 2, 3],
-        [4, 5, 6],
-        [7, 8, 0]]
+GOAL_3 = [[1,2,3],[4,5,6],[7,8,0]]
+GOAL_4 = [[1,2,3,4],[5,6,7,8],[9,10,11,12],[13,14,15,0]]
+DIRS   = [(-1,0),(1,0),(0,-1),(0,1)]
 
-DIRS = [(-1, 0), (1, 0), (0, -1), (0, 1)]
 
-# ------------------ UTILITY FUNCTIONS ------------------
-
-def find_zero(state):
-    for r in range(3):
-        for c in range(3):
-            if state[r][c] == 0:
+# ------------------ helpers ------------------
+def find_zero(st):
+    for r in range(len(st)):
+        for c in range(len(st[0])):
+            if st[r][c] == 0:
                 return r, c
 
-def manhattan(state):
+
+def manhattan(st):
+    size = len(st)
     d = 0
-    for r in range(3):
-        for c in range(3):
-            v = state[r][c]
+    for r in range(size):
+        for c in range(size):
+            v = st[r][c]
             if v != 0:
-                tr, tc = divmod(v - 1, 3)
+                tr, tc = divmod(v-1, size)
                 d += abs(r - tr) + abs(c - tc)
     return d
 
-def linear_conflict(state):
-    md = manhattan(state)
-    conflicts = 0
 
-    for r in range(3):
-        row = [state[r][c] for c in range(3) if state[r][c] != 0]
-        for i in range(len(row)):
-            for j in range(i + 1, len(row)):
-                tr_i, _ = divmod(row[i] - 1, 3)
-                tr_j, _ = divmod(row[j] - 1, 3)
-                if tr_i == r and tr_j == r and row[i] > row[j]:
-                    conflicts += 1
-
-    return md + 2 * conflicts
-
-# ------------------ MERGE SORT ------------------
-
-def merge_sort(arr):
-    if len(arr) <= 1:
-        return arr
-
-    mid = len(arr) // 2
-    left = merge_sort(arr[:mid])
-    right = merge_sort(arr[mid:])
-
-    return merge(left, right)
-
-def merge(left, right):
-    result = []
-    i = j = 0
-
-    while i < len(left) and j < len(right):
-        if left[i][0] < right[j][0]:   # compare heuristic value
-            result.append(left[i])
-            i += 1
-        else:
-            result.append(right[j])
-            j += 1
-
-    result.extend(left[i:])
-    result.extend(right[j:])
-    return result
-
-# ------------------ GREEDY AI SOLVER (MERGE SORT) ------------------
-
-def greedy_solver(start):
-    open_list = [(linear_conflict(start), start, [])]
+def buddy_path_3x3(start):
+    open_list = [(manhattan(start), start, [])]
     visited = set()
 
     while open_list:
-        open_list = merge_sort(open_list)   # 🔹 MERGE SORT USED HERE
+        open_list.sort(key=lambda x: x[0])
         _, state, path = open_list.pop(0)
 
-        if state == GOAL:
+        if state == GOAL_3:
             return path + [state]
 
         visited.add(str(state))
@@ -99,188 +51,325 @@ def greedy_solver(start):
             if 0 <= nr < 3 and 0 <= nc < 3:
                 nxt = deepcopy(state)
                 nxt[zr][zc], nxt[nr][nc] = nxt[nr][nc], 0
-
                 if str(nxt) not in visited:
-                    h = linear_conflict(nxt)
-                    open_list.append((h, nxt, path + [state]))
-
+                    open_list.append((manhattan(nxt), nxt, path + [state]))
     return []
 
-# ------------------ GUI APPLICATION ------------------
 
-class PuzzleApp:
-    def __init__(self, root):
-        self.root = root
-        root.title("8-Puzzle — User vs Greedy AI (Merge Sort)")
-        root.geometry("1500x800")
-        root.configure(bg=BG_COLOR)
+def buddy_path_4x4(start):
+    s = deepcopy(start)
+    p = [deepcopy(s)]
+    for _ in range(300):
+        zr, zc = find_zero(s)
+        dr, dc = random.choice(DIRS)
+        nr, nc = zr + dr, zc + dc
+        if 0 <= nr < 4 and 0 <= nc < 4:
+            s[zr][zc], s[nr][nc] = s[nr][nc], 0
+        p.append(deepcopy(s))
+        if s == GOAL_4:
+            break
+    return p
 
-        self.user_state = deepcopy(GOAL)
-        self.ai_state = deepcopy(GOAL)
 
-        self.user_steps = 0
-        self.ai_steps = 0
+# ------------------ MAIN CLASS ------------------
+class PuzzleRace:
+    def __init__(self):
+        self.win = ctk.CTk()
+        self.win.geometry("1500x850")
+        self.win.title("Puzzle Race 🧩 — Player vs Buddy")
 
-        self.image_name = "dog.jpg"
+        self.mode = "3x3"
 
-        self.build_top()
-        self.build_sidebar()
-        self.build_center()
-        self.load_image()
-        self.update_boards()
+        # *** TWO boards ***
+        self.player_board = []
+        self.buddy_board  = []
 
-    def build_top(self):
-        bar = tk.Frame(self.root, bg="Dark slate grey", height=80)
-        bar.pack(fill="x")
+        # shared images
+        self.images = []
+        self.image_name = None
 
-        tk.Label(
-            bar,
-            text="8-Puzzle — User vs Greedy AI (Merge Sort)",
-            bg="Dark slate grey",
-            fg="white",
-            font=("Segoe UI", 22, "bold")
-        ).pack(pady=10)
+        # steps
+        self.player_steps = 0
+        self.buddy_steps  = 0
 
-    def build_sidebar(self):
-        side = tk.Frame(self.root, bg="Dark slate grey", width=200)
-        side.pack(side="left", fill="y")
+        # completion states
+        self.player_done = False
+        self.buddy_done  = False
 
-        images = ["dog.jpg", "girl.jpg", "bike.jpg",
-                  "tiger.jpg", "mickey.jpg", "snowwhite.jpg"]
+        self.build_ui()
+        self.load_images()
+        self.new_game()
+        self.update_labels()
 
-        for img in images:
-            if not os.path.exists(img):
-                continue
-            im = Image.open(img).resize((90, 90))
-            tk_img = ImageTk.PhotoImage(im)
-            b = tk.Button(side, image=tk_img, bd=0,
-                          command=lambda x=img: self.change_image(x))
-            b.image = tk_img
-            b.pack(pady=10)
+        self.win.mainloop()
 
-    def build_center(self):
-        center = tk.Frame(self.root, bg=BG_COLOR)
-        center.pack(expand=True)
 
-        boards = tk.Frame(center, bg=BG_COLOR)
-        boards.pack()
+    # ---------------- UI BUILD ----------------
+    def build_ui(self):
+        top = ctk.CTkFrame(self.win, fg_color="#4E8DF5", corner_radius=0)
+        top.pack(fill="x")
+        ctk.CTkLabel(top, text="Puzzle Race 🧩",
+                     font=("Comic Sans MS", 36, "bold"),
+                     text_color="white").pack(pady=10)
 
-        self.user_tiles = self.create_board(boards, "USER", self.move_user)
-        self.ai_tiles = self.create_board(boards, "GREEDY AI", None)
+        main = ctk.CTkFrame(self.win)
+        main.pack(expand=True, fill="both")
 
-        controls = tk.Frame(center, bg=BG_COLOR)
-        controls.pack(pady=20)
+        # left panel
+        left = ctk.CTkFrame(main, width=330)
+        left.pack(side="left", fill="y", padx=10)
 
-        tk.Button(controls, text="Shuffle", font=("Segoe UI", 14),
-                  width=12, command=self.shuffle).pack(side="left", padx=10)
+        ctk.CTkLabel(left, text="Images",
+                     font=("Comic Sans MS", 24, "bold")).pack(pady=10)
+        self.img_frame = ctk.CTkScrollableFrame(left, width=300)
+        self.img_frame.pack(expand=True, fill="y", padx=10)
 
-        tk.Button(controls, text="Solve (AI)", font=("Segoe UI", 14),
-                  width=12, command=self.solve_ai).pack(side="left", padx=10)
+        ctk.CTkButton(left, text="Shuffle 🌀", command=self.shuffle,
+                      font=("Comic Sans MS", 22), height=50).pack(fill="x", pady=8)
+        ctk.CTkButton(left, text="Buddy Try 🤝", command=self.buddy_play,
+                      font=("Comic Sans MS", 22), height=50).pack(fill="x", pady=8)
+        ctk.CTkButton(left, text="I Give Up 😅", fg_color="#E74C3C",
+                      command=self.player_quits,
+                      font=("Comic Sans MS", 22), height=50).pack(fill="x", pady=8)
+        ctk.CTkButton(left, text="Toggle Size (3x3/4x4)",
+                      command=self.toggle_mode,
+                      font=("Comic Sans MS", 20), height=50).pack(fill="x", pady=8)
 
-        self.info_lbl = tk.Label(
-            center,
-            text="User Steps: 0 | AI Steps: 0",
-            font=("Segoe UI", 14),
-            bg=BG_COLOR
-        )
-        self.info_lbl.pack()
+        # PLAYER BOARD
+        mid = ctk.CTkFrame(main)
+        mid.pack(side="left", expand=True)
 
-    def create_board(self, parent, title, command):
-        frame = tk.Frame(parent, bg=BG_COLOR)
-        frame.pack(side="left", padx=40)
+        ctk.CTkLabel(mid, text="Player Board 🎮",
+                     font=("Comic Sans MS", 26, "bold")).pack(pady=8)
+        self.player_canvas = ctk.CTkCanvas(mid, width=500, height=500, highlightthickness=0)
+        self.player_canvas.pack(pady=10)
 
-        tk.Label(frame, text=title,
-                 font=("Segoe UI", 16, "bold"),
-                 bg=BG_COLOR).pack()
+        # BUDDY BOARD
+        right = ctk.CTkFrame(main)
+        right.pack(side="right", expand=True)
 
-        board = tk.Frame(frame, bg="black",
-                         width=BOARD_SIZE, height=BOARD_SIZE)
-        board.pack(pady=10)
-        board.pack_propagate(False)
+        ctk.CTkLabel(right, text="Buddy Board 🤖",
+                     font=("Comic Sans MS", 26, "bold")).pack(pady=8)
+        self.buddy_canvas = ctk.CTkCanvas(right, width=500, height=500, highlightthickness=0)
+        self.buddy_canvas.pack(pady=10)
 
-        tiles = []
-        for r in range(3):
-            for c in range(3):
-                b = tk.Button(board, bd=0, bg="black",
-                              activebackground="black",
-                              command=(lambda r=r, c=c: command(r, c))
-                              if command else None)
-                b.grid(row=r, column=c)
-                tiles.append(b)
-        return tiles
+        # status bar
+        status = ctk.CTkFrame(self.win)
+        status.pack(fill="x", pady=10)
 
-    def load_image(self):
-        img = Image.open(self.image_name).resize((BOARD_SIZE, BOARD_SIZE))
-        self.cuts = []
-        for i in range(8):
-            r, c = divmod(i, 3)
-            piece = img.crop(
-                (c * TILE, r * TILE,
-                 (c + 1) * TILE, (r + 1) * TILE))
-            self.cuts.append(ImageTk.PhotoImage(piece))
-        self.cuts.append(None)
+        self.player_lbl = ctk.CTkLabel(status, text="Player Moves: 0",
+                                       font=("Comic Sans MS", 26))
+        self.player_lbl.pack(side="left", padx=20)
 
-    def change_image(self, img):
-        self.image_name = img
-        self.load_image()
-        self.update_boards()
+        self.buddy_lbl  = ctk.CTkLabel(status, text="Buddy Moves:  0",
+                                       font=("Comic Sans MS", 26))
+        self.buddy_lbl.pack(side="left", padx=20)
 
-    def update_boards(self):
-        self.update_board(self.user_tiles, self.user_state)
-        self.update_board(self.ai_tiles, self.ai_state)
-        self.info_lbl.config(
-            text=f"User Steps: {self.user_steps} | AI Steps: {self.ai_steps}")
+        self.winner_lbl = ctk.CTkLabel(status, text="",
+                                       font=("Comic Sans MS", 32, "bold"),
+                                       text_color="#154360")
+        self.winner_lbl.pack(side="right", padx=20)
 
-    def update_board(self, tiles, state):
-        for i in range(9):
-            r, c = divmod(i, 3)
-            v = state[r][c]
-            tiles[i].config(image="" if v == 0 else self.cuts[v - 1])
 
-    def move_user(self, r, c):
-        zr, zc = find_zero(self.user_state)
-        if abs(r - zr) + abs(c - zc) == 1:
-            self.user_state[zr][zc], self.user_state[r][c] = \
-                self.user_state[r][c], 0
-            self.user_steps += 1
-            self.update_boards()
+    # -------- IMAGE LOADING ----------
+    def load_images(self):
+        for w in self.img_frame.winfo_children():
+            w.destroy()
 
-            if self.user_state == GOAL:
-                messagebox.showinfo(
-                    "User Solved",
-                    f"You solved it in {self.user_steps} steps!")
+        imgs = [f for f in os.listdir("images") if f.lower().endswith((".jpg",".png",".jpeg"))]
+        if not imgs:
+            return
 
+        self.image_name = imgs[0]
+
+        for img in imgs:
+            im = Image.open(f"images/{img}").resize((150,150))
+            imgtk = ImageTk.PhotoImage(im)
+            b = ctk.CTkButton(self.img_frame, image=imgtk, text="",
+                              width=160, height=160,
+                              command=lambda x=img: self.select_image(x))
+            b.image = imgtk
+            b.pack(pady=6)
+
+
+    # -------- GAME SETUP ----------
+    def select_image(self, name):
+        self.image_name = name
+        self.slice_image()
+        self.redraw_all()
+
+    def toggle_mode(self):
+        self.mode = "4x4" if self.mode=="3x3" else "3x3"
+        self.new_game()
+
+    def new_game(self):
+        size = 3 if self.mode=="3x3" else 4
+
+        base = [[size*r+c+1 for c in range(size)] for r in range(size)]
+        base[size-1][size-1] = 0
+
+        self.player_board = deepcopy(base)
+        self.buddy_board  = deepcopy(base)
+
+        self.shuffle_board(self.player_board)
+        self.shuffle_board(self.buddy_board)
+
+        self.player_steps = self.buddy_steps = 0
+        self.player_done  = self.buddy_done  = False
+        self.winner_lbl.configure(text="")
+
+        self.slice_image()
+        self.redraw_all()
+        self.update_labels()
+
+
+    def shuffle_board(self, board):
+        size = len(board)
+        for _ in range(200):
+            zr,zc = find_zero(board)
+            dr,dc = random.choice(DIRS)
+            nr,nc = zr+dr, zc+dc
+            if 0<=nr<size and 0<=nc<size:
+                board[zr][zc],board[nr][nc] = board[nr][nc],0
+
+
+    def slice_image(self):
+        if not self.image_name:
+            self.images=[None]
+            return
+
+        size = len(self.player_board)
+        board=500
+        tile=board//size
+
+        img=Image.open(f"images/{self.image_name}").resize((board,board))
+        self.images=[]
+
+        for i in range(size*size-1):
+            r,c = divmod(i,size)
+            piece=img.crop((c*tile,r*tile,(c+1)*tile,(r+1)*tile))
+            self.images.append(ImageTk.PhotoImage(piece))
+        self.images.append(None)
+
+
+    # -------- DRAWING ----------
+    def draw(self, canvas, board):
+        canvas.delete("all")
+        size=len(board)
+        tile=500//size
+
+        for r in range(size):
+            for c in range(size):
+                v=board[r][c]
+                if v!=0:
+                    canvas.create_image(c*tile,r*tile,anchor='nw', image=self.images[v-1])
+                else:
+                    canvas.create_rectangle(c*tile,r*tile,c*tile+tile,r*tile+tile,
+                                            fill="#000",outline="")
+
+    def redraw_all(self):
+        self.draw(self.player_canvas, self.player_board)
+        self.draw(self.buddy_canvas,  self.buddy_board)
+        self.player_canvas.bind("<Button-1>", self.player_click)
+
+
+    # -------- PLAYER MOVES ----------
+    def player_click(self,event):
+        size=len(self.player_board)
+        tile=500//size
+        c=event.x//tile
+        r=event.y//tile
+        self.player_move(r,c)
+
+    def player_move(self,r,c):
+        zr,zc=find_zero(self.player_board)
+        if abs(r-zr)+abs(c-zc)==1:
+            self.player_board[zr][zc],self.player_board[r][c]= \
+            self.player_board[r][c],0
+
+            self.player_steps+=1
+            self.redraw_all()
+            self.update_labels()
+            self.check_end()
+
+
+    # -------- CONTROL ----------
     def shuffle(self):
-        state = deepcopy(GOAL)
-        for _ in range(150):
-            zr, zc = find_zero(state)
-            dr, dc = random.choice(DIRS)
-            nr, nc = zr + dr, zc + dc
-            if 0 <= nr < 3 and 0 <= nc < 3:
-                state[zr][zc], state[nr][nc] = state[nr][nc], 0
+        self.new_game()
 
-        self.user_state = deepcopy(state)
-        self.ai_state = deepcopy(state)
-        self.user_steps = 0
-        self.ai_steps = 0
-        self.update_boards()
+    def player_quits(self):
+        self.player_done=False
+        self.buddy_play(force=True)
 
-    def solve_ai(self):
-        self.ai_steps = 0
-        path = greedy_solver(deepcopy(self.ai_state))
-        self.animate_ai(path, 0)
 
-    def animate_ai(self, path, i):
-        if i < len(path):
-            if i > 0:
-                self.ai_steps += 1
-            self.ai_state = deepcopy(path[i])
-            self.update_boards()
-            self.root.after(400, lambda: self.animate_ai(path, i + 1))
+    # -------- BUDDY ----------
+    def buddy_play(self, force=False):
+        size=len(self.buddy_board)
+        path = buddy_path_3x3(deepcopy(self.buddy_board)) if size==3 else buddy_path_4x4(deepcopy(self.buddy_board))
+        self.play_buddy_path(path,0,force)
 
-# ------------------ MAIN ------------------
+    def play_buddy_path(self,path,i,force):
+        if i>=len(path):
+            self.check_end(force=True)
+            return
 
-if __name__ == "__main__":
-    root = tk.Tk()
-    PuzzleApp(root)
-    root.mainloop()
+        self.buddy_board=deepcopy(path[i])
+        if i>0:self.buddy_steps+=1
+
+        self.redraw_all()
+        self.update_labels()
+        self.win.after(200,lambda:self.play_buddy_path(path,i+1,force))
+
+
+    # -------- WIN LOGIC ----------
+    def check_end(self, force=False):
+        goal=GOAL_3 if len(self.player_board)==3 else GOAL_4
+
+        # if player reached goal anytime
+        if self.player_board == goal:
+            self.player_done=True
+
+        # if buddy reached goal anytime
+        if self.buddy_board == goal:
+            self.buddy_done=True
+
+        # QUIT or buddy solved while player didn't
+        if force and not self.player_done:
+            self.show("Buddy Wins 😎")
+            return
+
+        # buddy solved first
+        if self.buddy_done and not self.player_done:
+            self.show("Buddy Wins 😎")
+            return
+
+        # player solved first
+        if self.player_done and not self.buddy_done:
+            self.show("You Win 🎉")
+            return
+
+        # both solved → compare steps
+        if self.player_done and self.buddy_done:
+            if self.player_steps < self.buddy_steps:
+                self.show("You Win 🎉")
+            elif self.buddy_steps < self.player_steps:
+                self.show("Buddy Wins 😎")
+            else:
+                self.show("Draw 😮")
+            return
+
+
+    def show(self,msg):
+        self.winner_lbl.configure(text=msg)
+
+    def update_labels(self):
+        self.player_lbl.configure(text=f"Player Moves: {self.player_steps}")
+        self.buddy_lbl.configure(text=f"Buddy Moves:  {self.buddy_steps}")
+
+
+# --------------------
+if __name__=="__main__":
+    PuzzleRace()
+
+
+
